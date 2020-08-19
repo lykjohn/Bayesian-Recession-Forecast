@@ -1,0 +1,20 @@
+# OECD Table Documentation
+
+## Response: 
+	1) recBinary: A binary indicator of recession (0=No Recession, 1=Recession) for each country throughout time 
+
+## Covariates(recession indicators): 
+	1) realGDP: Normalized real GDP index calculated via the metrics of Bureau of Economic Analysis (BEA)
+	2) realPerInc: Despite its name "real personal income", this is the real disposable household income index for each OECD country
+		       This index was only avaible in terms of quarterly measures. Cubic spline interpolation is used to transform the data from quarterly units into monthly units 
+	3) unempRate: Harmonized unemployment rate for each country obtained through the BEA
+	4) indProd: Industrial production indexes of each country obtained through the OECD database
+	5) retailSales: Indexes of total retail trades for each country collected through the BEA
+
+## Description:
+	Every country has 240 monthly observations for each recession indicators including 1 response for each observation
+
+## Sources:
+	1) Bureau of Economic Analysis(BEA) OECD countries database
+	2) OECD database
+	3) ycharts.com

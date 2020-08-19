@@ -1,0 +1,461 @@
+# Evaluating Hierarchical Logit and Probit Regression Models on Economic Recessions of 10 Organization for Economic Cooperation and Development (OECD) Countries
+## A Bayesian Computing Project by Yin Kwong John Lee, Yuanbin Sun, and Chenyi Yu
+
+**This markdown file contains the portion of code contributed by Yin Kwong John Lee**
+
+<br/><br/>
+
+(Note: Some code chunks may take a long time to run (e.g. NUTS for Random Walk (RW) Logit Regression Model and Random Walk (RW) Probit Regression Model))
+
+```{r,include=FALSE}
+# Initializaing work directory 
+# <!-- working directory here -->
+
+# Loading libraries
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(grid)
+library(dplyr)
+library(ggplotify)
+
+
+```
+
+**Preliminary Visualiization and Exploratory Data Analysis**<br/>
+```{r,message=FALSE,warning=FALSE,fig.height=5,fig.width=15}
+# Data frame containing recession indicators and outcomes of the 10 OECD countries from October 1999 to September 2019
+oecdTable<-read.csv("./data/manipulated_data/oecdTable.csv",stringsAsFactors = FALSE)
+library(lubridate)
+# Formatting dates to %Y%m%d
+oecdTable$Date=mdy(oecdTable$Date)
+# Visualize the durations of recession for each OECD country
+recPlot<-ggplot(oecdTable,aes(x=Date,y=recBinary,color=Country))+geom_bar(stat="identity")+facet_wrap(~Country,nrow=5)+labs(title="Recession Time Series of the 10 OECD Countries",x="Time",y="Recession Outcome",caption="Figure 1 Recession time series of the 10 OECD countries from 1999-2019.")+theme(plot.caption=element_text(hjust=0,size=10,face="italic"))
+recPlot
+#---------------------------------------------------------
+# For each year, calculate the proportion of time that a recession occurs
+recDuration<-c()
+for (i in 1:200){
+  recDuration[i]<-mean(oecdTable$recBinary[seq(1,2412,12)[i]:(seq(1,2412,12)[i+1]-1)])
+}
+# Giving year labels
+recYear<-c()
+for (yr in 2000:2019){
+  recYear<-append(recYear,paste0("yr",toString(yr)))
+}
+# Store result in a data frame
+oecdYearlyRecDuration<-data.frame(Country=c("USA","UK","NET","LUX","JAP","KOR","GER","FRA","DEN","CAN"), matrix(recDuration,nrow=10,ncol=20,byrow=TRUE));colnames(oecdYearlyRecDuration)=c("Country",recYear)
+# Example plots to show linearity and non-linearity
+linRecDuration<-ggplot(oecdYearlyRecDuration)+geom_point(aes(x=yr2014,y=yr2009,label=Country))+xlim(0,1)+ylim(0,1)+geom_text_repel(aes(x=yr2014,y=yr2009,label=Country),nudge_x=0.05,size=3)+xlab("Recesscion by country (2014)")+ylab("Recession by country (2009)")
+nonlinRecDuration<-ggplot(oecdYearlyRecDuration)+geom_point(aes(x=yr2019,y=yr2016,label=Country))+xlim(0,1)+ylim(0,1)+geom_text_repel(aes(x=yr2019,y=yr2016,label=Country),nudge_x=0.05,size=3)+xlab("Recesscion by country (2019)")+ylab("Recession by country (2016)")
+
+grid.arrange(linRecDuration,nonlinRecDuration,nrow=1,ncol=2,bottom=textGrob("Figure 2 (a) Percentage of time throughout the year that recession persisted, in 2009 and 2014. (b)  Percentage of time throughout the year that recession persisted, in 2016 and 2019.",x=0.05,y=0.5,just="left",gp=gpar(fontsize=10,fontface="italic")))
+
+#--------------------------------------------------------------------------
+# Representing the countries with numeric group numbers 
+oecdTable$Country<-oecdTable$Country%>%sapply(as.factor)%>%sapply(unclass)
+# Representing the times with numeric group numbers 
+oecdTable$Date<-oecdTable$Date%>%sapply(as.factor)%>%sapply(unclass)
+# Standardizing the covariates in matrix form 
+x_std<-oecdTable%>%select(-c(Country,Date,recBinary))%>%scale(center=TRUE,scale=TRUE)%>%as.matrix()
+
+#--------------------------------------------------------------------------
+# Chi-square tests for independence of outcome between countries
+chisq.test(table(oecdTable$Country,oecdTable$recBinary))
+# Chi-square tests for independence of outcome throughout time 
+chisq.test(table(oecdTable$Date,oecdTable$recBinary))
+#---------------------------------------------------------------------------------------
+cor.test(oecdTable$Date,oecdTable$retailSales)
+cor.test(oecdTable$Date,oecdTable$indProd)
+cor.test(oecdTable$Date,oecdTable$unempRate)
+cor.test(oecdTable$Date,oecdTable$realPersInc)
+cor.test(oecdTable$Date,oecdTable$realGDP)
+
+```
+
+
+<br/>**Posterior Predictive Checks**<br/>
+```{r,message=FALSE,warning=FALSE}
+set.seed(1)
+# posterior predictive test using the test quantity T = number of switches between 0 and 1 in the actual obeservations
+N_switches_obs<-sum(sapply(2:length(oecdTable$recBinary),function(i) oecdTable$recBinary[i]!=oecdTable$recBinary[i-1]))
+# number of iterations for drawing from the posterior 
+M=10000
+# number of response switched for all iterations
+N_switches<-rep(NA,M)
+
+for (m in 1:M){
+  # sample alpha from posterior 
+  alpha=rnorm(1,0,10)
+  # sample beta from poosterior
+  beta=rnorm(5,0,2.5)
+  Xbeta<-x_std%*%beta
+  # sample yrep from posterior predictive distribution
+  yrep=rbinom(n=length(oecdTable$recBinary),size=1,prob=plogis(alpha+Xbeta))
+  N_switches[m] = sum(sapply(2:length(oecdTable$recBinary),function(i) yrep[i]!= yrep[i-1]))
+}
+# proportion of simulations that have more switches than the actual observation (Bayesian p-value)
+pp_pval=mean(N_switches>=N_switches_obs)
+
+# Comparing the number of switchesvia histogram
+library(latex2exp)
+hist(N_switches, xlab = TeX("$T(recBinary^{rep})$"),main =TeX(paste("$\\hat{p} = $",pp_pval))) 
+abline(v = N_switches_obs, col = "red")
+legend("topright", legend = "T(recBinary)=96", col = "red", lty = 1, bty = "n")
+
+```
+
+
+<br/>**Maximum Liklihood Estimation(MLE) under Generalized Linear Model(GLM)**<br/>
+<br/>*MLE for Logit Regression Model*<br/>
+```{r,message=FALSE,warning=FALSE}
+# fitting glm on time-inclusive data for logistic regression
+oecdLogitMLE<-glm(recBinary~.,data=data.frame(cbind(oecdTable[c("Date","recBinary")],x_std)),family=binomial("logit"))
+# summary of the fit
+summary(oecdLogitMLE)
+
+```
+
+<br/>*MLE for Probit Regression Model*<br/>
+```{r,message=FALSE,warning=FALSE}
+# fitting glm on time-inclusive data for probit regression
+oecdProbitMLE<-glm(recBinary~.,data=data.frame(cbind(oecdTable[c("Date","recBinary")],x_std)),family=binomial("probit"))
+#summary of the fit 
+summary(oecdProbitMLE)
+
+```
+
+
+
+<br/>**No-U-Turn Sampling(NUTS) Approach**<br/>
+```{r,message=FALSE,warning=FALSE}
+library(rstan)
+library(bayesplot)
+library(rstanarm)
+# Configurating stan to use multicore function fromm pc
+options(mc.cores = parallel::detectCores())
+rstan_options(auto_write = TRUE)
+
+```
+
+<br/>*No-U-Turn Sampling with Weighted-times(WT) Logistic Regression Model*<br/>
+```{r}
+## see "oecdLogitWT.stan"
+
+# Listing data necessary to fit a WT logistic regression model
+oecdLogitData_WT<-list(N=2400,y=array(oecdTable$recBinary),x=as.matrix(cbind(oecdTable[c("Date")],x_std)))
+# NUTS sampling from a WT logistic regression model
+oecdLogitNUTS_WT<-stan(file="oecdLogitWT.stan",data=oecdLogitData_WT,chains=4,warmup=2000,iter=4000,cores=2,refresh=0)
+
+# error plot
+errLogitWT<-plot(oecdLogitNUTS_WT)+ vline_0(size=1.5,color="blue",linetype=2)
+
+```
+
+
+<br/>*No-U-Turn Sampling with Simple Random Intercept(SRI) Logistic Regression Model*<br/>
+```{r,,message=FALSE,warning=FALSE}
+## see "oecdLogitSRI.stan"
+
+# Listing data necessary to fit a SRI logistic regression model
+oecdLogitData_SRI<-list(N=2400,C=10,K=5,y=array(oecdTable$recBinary),x=x_std,g=array(oecdTable$Date))
+# NUTS sampling from a SRI logistic regression model
+oecdLogitNUTS_SRI<-stan(file="oecdLogitSRI.stan",data=oecdLogitData_SRI,chains=4,warmup=2000,iter=6000,cores=2,refresh=0)
+
+# extracting stanfit mean 95% CI's for each parameters
+alphaLowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[1,1]
+alphaMeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[1,1]
+alphaUpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[1,2]
+wtLowerLogit_SRI<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2:2401,])[[1]]
+wtMeanLogit_SRI<-mean(summary(oecdLogitNUTS_SRI)$summary[,"mean"][2:2401])
+wtUpperLogit_SRI<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2:2401,])[[2]]
+beta1LowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2402,1]
+beta1MeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[2402,1]
+beta1UpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2402,2]
+beta2LowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2403,1]
+beta2MeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[2403,1]
+beta2UpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2403,2]
+beta3LowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2404,1]
+beta3MeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[2404,1]
+beta3UpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2404,2]
+beta4LowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2405,1]
+beta4MeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[2405,1]
+beta4UpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2405,2]
+beta5LowerLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2406,1]
+beta5MeanLogit_SRI<-summary(oecdLogitNUTS_SRI)$summary[2406,1]
+beta5UpperLogit_SRI<-posterior_interval(as.matrix(oecdLogitNUTS_SRI),prob=0.95)[2406,2]
+# storing mean and CI's into a dataframe
+errLogitSRI<-data.frame(parameters=c("alpha","w_t","beta[1]","beta[2]","beta[3]","beta[4]","beta[5]"),mean=c(alphaMeanLogit_SRI,wtMeanLogit_SRI,beta1MeanLogit_SRI,beta2MeanLogit_SRI,beta3MeanLogit_SRI,beta4MeanLogit_SRI,beta5MeanLogit_SRI),lower=c(alphaLowerLogit_SRI,wtLowerLogit_SRI,beta1LowerLogit_SRI,beta2LowerLogit_SRI,beta3LowerLogit_SRI,beta4LowerLogit_SRI,beta5LowerLogit_SRI),upper=c(alphaUpperLogit_SRI,wtUpperLogit_SRI,beta1UpperLogit_SRI,beta2UpperLogit_SRI,beta3UpperLogit_SRI,beta4UpperLogit_SRI,beta5UpperLogit_SRI))
+# plotting error bars
+errLogitSRI<-ggplot()+geom_errorbarh(data=errLogitSRI,aes(y=parameters,x=upper,xmin=upper,xmax=lower),height=0.2,size=2,color="maroon4")+geom_point(data=errLogitSRI,aes(y=parameters,x=mean),size=4,shape=21,fill="black")+theme_bw()+ylab("")+xlab("")+geom_vline(xintercept=0, linetype="dashed",size=1.5,color="blue")
+
+
+```
+
+<br/>*No-U-Turn Sampling with Random Walk(RW) Logistic Regression Model*<br/>
+```{r,message=FALSE,warning=FALSE}
+## "oecdLogitRW.stan"
+
+# Listing data necessary to fit a RW logistic regression model
+oecdLogitData_RW<-list(N=2400,C=10,T=240,K=5,y=as.array(matrix(oecdTable$recBinary,nrow=10,ncol=240,byrow=TRUE)),x=x_std)
+# NUTS sampling from a RW logistic regression model
+oecdLogitNUTS_RW<-stan(file="oecdLogitRW.stan",data=oecdLogitData_RW,chains=4,warmup=2000,iter=4000,cores=2,refresh=0)
+
+
+# extracting stanfit mean 95% CI's for each parameters
+alphaLowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[1:240,])[[1]]
+alphaMeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[,"mean"][1:240])
+alphaUpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[1:240,])[[2]]
+
+beta1LowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+1,240+1200,5),])[[1]]
+beta1MeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[241:480,1])
+beta1UpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+1,240+1200,5),])[[2]]
+
+beta2LowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+2,240+1200,5),])[[1]]
+beta2MeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[481:720,1])
+beta2UpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+2,240+1200,5),])[[2]]
+
+beta3LowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+3,240+1200,5),])[[1]]
+beta3MeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[721:960,1])
+beta3UpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+3,240+1200,5),])[[2]]
+
+
+beta4LowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+4,240+1200,5),])[[1]]
+beta4MeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[961:1200,1])
+beta4UpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+4,240+1200,5),])[[2]]
+
+
+beta5LowerLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+5,240+1200,5),])[[1]]
+beta5MeanLogit_RW<-mean(summary(oecdLogitNUTS_RW)$summary[1201:1440,1])
+beta5UpperLogit_RW<-colMeans(posterior_interval(as.matrix(oecdLogitNUTS_RW),prob=0.95)[seq(240+5,240+1200,5),])[[2]]
+
+
+# storing mean and CI's into a dataframe
+errLogitRW<-data.frame(parameters=c("alpha","beta[1]","beta[2]","beta[3]","beta[4]","beta[5]"),mean=c(alphaMeanLogit_RW,beta1MeanLogit_RW,beta2MeanLogit_RW,beta3MeanLogit_RW,beta4MeanLogit_RW,beta5MeanLogit_RW),lower=c(alphaLowerLogit_RW,beta1LowerLogit_RW,beta2LowerLogit_RW,beta3LowerLogit_RW,beta4LowerLogit_RW,beta5LowerLogit_RW),upper=c(alphaUpperLogit_RW,beta1UpperLogit_RW,beta2UpperLogit_RW,beta3UpperLogit_RW,beta4UpperLogit_RW,beta5UpperLogit_RW))
+
+# plotting error bars
+errLogitRW<-ggplot()+geom_errorbarh(data=errLogitRW,aes(y=parameters,x=upper,xmin=upper,xmax=lower),height=0.2,size=2,color="maroon4")+geom_point(data=errLogitRW,aes(y=parameters,x=mean),size=4,shape=21,fill="black")+theme_bw()+ylab("")+xlab("")+geom_vline(xintercept=0, linetype="dashed",size=1.5,color="blue")
+
+
+```
+
+
+<br/>*No-U-Turn Sampling with Weighted-times(WT) Probit Regression Model*<br/>
+```{r}
+## see "oecdProbitWT.stan"
+
+# Listing data necessary to fit a WT probit regression model
+oecdProbitData_WT<-list(N=2400,y=array(oecdTable$recBinary),x=as.matrix(cbind(oecdTable[c("Date")],x_std)))
+# NUTS sampling from a WT probit regression model
+oecdProbitNUTS_WT<-stan(file="oecdProbitWT.stan",data=oecdProbitData_WT,chains=1,warmup=2000,iter=4000,cores=2,refresh=0)
+
+# error plot
+errProbitWT<-plot(oecdProbitNUTS_WT)+ vline_0(size=1.5,color="blue",linetype=2)
+
+```
+
+<br/>*No-U-Turn Sampling with Simple Random Intercept(SRI) Probit Regression Model*<br/>
+```{r,message=FALSE,warning=FALSE}
+## see "oecdProbitSRI"
+
+# Listing data necessary to fit a SRI probit regression model
+oecdProbitData_SRI<-list(N=2400,C=10,K=5,y=array(oecdTable$recBinary),x=x_std,g=array(oecdTable$Date))
+# NUTS sampling from a SRI probit regression model
+oecdProbitNUTS_SRI<-stan(file="oecdProbitSRI.stan",data=oecdProbitData_SRI,chains=4,warmup=2000,iter=6000,cores=2,refresh=0)
+
+# extracting stanfit mean 95% CI's for each parameters
+alphaLowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[1,1]
+alphaMeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[1,1]
+alphaUpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[1,2]
+wtLowerProbit_SRI<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2:2401,])[[1]]
+wtMeanProbit_SRI<-mean(summary(oecdProbitNUTS_SRI)$summary[,"mean"][2:2401])
+wtUpperProbit_SRI<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2:2401,])[[2]]
+beta1LowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2402,1]
+beta1MeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[2402,1]
+beta1UpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2402,2]
+beta2LowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2403,1]
+beta2MeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[2403,1]
+beta2UpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2403,2]
+beta3LowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2404,1]
+beta3MeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[2404,1]
+beta3UpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2404,2]
+beta4LowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2405,1]
+beta4MeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[2405,1]
+beta4UpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2405,2]
+beta5LowerProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2406,1]
+beta5MeanProbit_SRI<-summary(oecdProbitNUTS_SRI)$summary[2406,1]
+beta5UpperProbit_SRI<-posterior_interval(as.matrix(oecdProbitNUTS_SRI),prob=0.95)[2406,2]
+# storing mean and CI's into a dataframe
+errProbitWT<-data.frame(parameters=c("alpha","w_t","beta[1]","beta[2]","beta[3]","beta[4]","beta[5]"),mean=c(alphaMeanProbit_SRI,wtMeanProbit_SRI,beta1MeanProbit_SRI,beta2MeanProbit_SRI,beta3MeanProbit_SRI,beta4MeanProbit_SRI,beta5MeanProbit_SRI),lower=c(alphaLowerProbit_SRI,wtLowerProbit_SRI,beta1LowerProbit_SRI,beta2LowerProbit_SRI,beta3LowerProbit_SRI,beta4LowerProbit_SRI,beta5LowerProbit_SRI),upper=c(alphaUpperProbit_SRI,wtUpperProbit_SRI,beta1UpperProbit_SRI,beta2UpperProbit_SRI,beta3UpperProbit_SRI,beta4UpperProbit_SRI,beta5UpperProbit_SRI))
+# plotting error bars
+errProbitSRI<-ggplot()+geom_errorbarh(data=errProbitWT,aes(y=parameters,x=upper,xmin=upper,xmax=lower),height=0.2,size=2,color="maroon4")+geom_point(data=errProbitWT,aes(y=parameters,x=mean),size=4,shape=21,fill="black")+theme_bw()+ylab("")+xlab("")+geom_vline(xintercept=0,linetype="dashed",size=1.5,color="blue")
+
+```
+<br/>*No-U-Turn Sampling with Random Walk(RW) Probit Regression Model*<br/>
+```{r,message=FALSE,warning=FALSE}
+## see "oecdProbitRW"
+
+# Listing data necessary to fit a RW probit regression model
+oecdProbitData_RW<-list(N=2400,C=10,T=240,K=5,y=as.array(matrix(oecdTable$recBinary,nrow=10,ncol=240,byrow=TRUE)),x=x_std)
+# NUTS sampling from a RW probit regression model
+oecdProbitNUTS_RW<-stan(file="oecdProbitRW.stan",data=oecdProbitData_RW,chains=4,warmup=2000,iter=4000,cores=2,refresh=0)
+
+
+# extracting stanfit mean 95% CI's for each parameters
+alphaLowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[1:240,])[[1]]
+alphaMeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[,"mean"][1:240])
+alphaUpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[1:240,])[[2]]
+
+beta1LowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+1,240+1200,5),])[[1]]
+beta1MeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[241:480,1])
+beta1UpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+1,240+1200,5),])[[2]]
+
+beta2LowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+2,240+1200,5),])[[1]]
+beta2MeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[481:720,1])
+beta2UpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+2,240+1200,5),])[[2]]
+
+beta3LowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+3,240+1200,5),])[[1]]
+beta3MeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[721:960,1])
+beta3UpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+3,240+1200,5),])[[2]]
+
+
+beta4LowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+4,240+1200,5),])[[1]]
+beta4MeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[961:1200,1])
+beta4UpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+4,240+1200,5),])[[2]]
+
+
+beta5LowerProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+5,240+1200,5),])[[1]]
+beta5MeanProbit_RW<-mean(summary(oecdProbitNUTS_RW)$summary[1201:1440,1])
+beta5UpperProbit_RW<-colMeans(posterior_interval(as.matrix(oecdProbitNUTS_RW),prob=0.95)[seq(240+5,240+1200,5),])[[2]]
+
+
+# storing mean and CI's into a dataframe
+errProbitRW<-data.frame(parameters=c("alpha","beta[1]","beta[2]","beta[3]","beta[4]","beta[5]"),mean=c(alphaMeanLogit_RW,beta1MeanProbit_RW,beta2MeanProbit_RW,beta3MeanProbit_RW,beta4MeanProbit_RW,beta5MeanProbit_RW),lower=c(alphaLowerProbit_RW,beta1LowerProbit_RW,beta2LowerProbit_RW,beta3LowerProbit_RW,beta4LowerProbit_RW,beta5LowerProbit_RW),upper=c(alphaUpperProbit_RW,beta1UpperProbit_RW,beta2UpperProbit_RW,beta3UpperProbit_RW,beta4UpperProbit_RW,beta5UpperProbit_RW))
+
+# plotting error bars
+errProbitRW<-ggplot()+geom_errorbarh(data=errProbitRW,aes(y=parameters,x=upper,xmin=upper,xmax=lower),height=0.2,size=2,color="maroon4")+geom_point(data=errProbitRW,aes(y=parameters,x=mean),size=4,shape=21,fill="black")+theme_bw()+ylab("")+xlab("")+geom_vline(xintercept=0, linetype="dashed",size=1.5,color="blue")
+
+```
+<br/>Error Plot Summary<br/>
+```{r}
+
+grid.arrange(errLogitWT,errLogitSRI,errLogitRW,errProbitWT,errProbitSRI,errProbitRW,nrow=2,ncol=3)
+  
+
+```
+
+<br/>**Model Selection**<br/>
+```{r}
+# Logit_RW
+print(oecdLogitNUTS_RW, c('alpha', 'beta'),  probs = c(0.025, 0.975))
+oecdLogit_WT <- extract(oecdLogitNUTS_WT,permuted = TRUE)
+oecdLogit_SRI <- extract(oecdLogitNUTS_SRI,permuted = TRUE)
+oecdProbit_RW <- extract(oecdProbitNUTS_RW,permuted = TRUE)
+oecdProbit_WT <- extract(oecdProbitNUTS_WT,permuted = TRUE)
+oecdProbit_SRI <- extract(oecdProbitNUTS_SRI,permuted = TRUE)
+
+
+```
+
+```{r}
+library(loo)
+log_lik_L_SRI= extract_log_lik(oecdLogitNUTS_SRI,merge_chains=TRUE)
+
+#Logit_SRI
+
+#DIC
+bayesEstLogitSRI<-summary(oecdLogitNUTS_SRI)$summary[8:2407,"mean"]
+p_DICLogitSRI = 2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - mean(rowSums(log_lik_L_SRI)))
+DICLogitSRI = -2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - p_DICLogitSRI)
+DICLogitSRI
+#WAIC
+waic_L_SRI_res = waic(log_lik_L_SRI)
+waic_L_SRI = waic_L_SRI_res$estimates["waic","Estimate"]
+waic_L_SRI
+#LOO_CV
+log_lik_L_SRI= extract_log_lik(oecdLogitNUTS_SRI,merge_chains=FALSE)
+loo_L_SRI_res = loo(log_lik_L_SRI, r_eff = relative_eff(exp(log_lik_L_SRI)))
+loo_L_SRI = loo_L_SRI_res$estimates["looic","Estimate"]
+loo_L_SRI
+```
+
+```{r}
+#Logit_WT
+log_lik_L_WT= extract_log_lik(oecdLogitNUTS_WT,merge_chains=TRUE)
+#DIC
+bayesEstLogitWT<-summary(oecdLogitNUTS_WT)$summary[8:2407,"mean"]
+p_DICLogitWT = 2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - mean(rowSums(log_lik_L_WT)))
+DICLogitWT = -2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - p_DICLogitWT)
+DICLogitWT
+#WAIC
+waic_L_WT_res = waic(log_lik_L_WT)
+waic_L_WT = waic_L_WT_res$estimates["waic","Estimate"]
+waic_L_WT
+#LOO_CV
+log_lik_L_WT= extract_log_lik(oecdLogitNUTS_WT,merge_chains=FALSE)
+loo_L_WT_res = loo(log_lik_L_WT, r_eff = relative_eff(exp(log_lik_L_WT)))
+loo_L_WT = loo_L_WT_res$estimates["looic","Estimate"]
+loo_L_WT
+
+```
+```{r}
+library(loo)
+log_lik_P_SRI= extract_log_lik(oecdProbitNUTS_SRI,merge_chains=TRUE)
+
+#Probit_SRI
+#DIC
+bayesEstProbitSRI<-summary(oecdProbitNUTS_SRI)$summary[8:2407,"mean"]
+p_DICProbitSRI = 2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - mean(rowSums(log_lik_P_SRI)))
+DICProbitSRI = -2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - p_DICProbitSRI)
+DICProbitSRI 
+#WAIC
+waic_P_SRI_res = waic(log_lik_P_SRI)
+waic_P_SRI = waic_P_SRI_res$estimates["waic","Estimate"]
+waic_P_SRI
+#LOO_CV
+log_lik_P_SRI= extract_log_lik(oecdProbitNUTS_SRI,merge_chains=FALSE)
+loo_P_SRI_res = loo(log_lik_P_SRI, r_eff = relative_eff(exp(log_lik_P_SRI)))
+loo_P_SRI = loo_P_SRI_res$estimates["looic","Estimate"]
+loo_P_SRI
+```
+
+```{r}
+#Probit_WT
+log_lik_P_WT= extract_log_lik(oecdProbitNUTS_WT,merge_chains=TRUE)
+
+#DIC
+bayesEstProbitWT<-summary(oecdProbitNUTS_WT)$summary[8:2407,"mean"]
+p_DICProbitWT = 2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - mean(rowSums(log_lik_P_WT)))
+DICProbitWT = -2 * (sum(dbinom(x=oecdTable$recBinary,size=1,prob=plogis(alpha+Xbeta),log=TRUE)) - p_DICProbitWT)
+DICProbitWT
+
+#WAIC
+waic_P_WT_res = waic(log_lik_P_WT)
+waic_P_WT = waic_P_WT_res$estimates["waic","Estimate"]
+waic_P_WT
+#LOO_CV
+log_lik_P_WT= extract_log_lik(oecdProbitNUTS_WT,merge_chains=FALSE)
+loo_P_WT_res = loo(log_lik_P_WT, r_eff = relative_eff(exp(log_lik_P_WT)))
+loo_P_WT = loo_P_WT_res$estimates["looic","Estimate"]
+loo_P_WT
+
+```
+
+```{r}
+#Model Selection Summary
+res_df = data.frame(Logit_WT = c(DICLogitWT,waic_L_WT,loo_L_WT),
+                    Probit_WT = c(DICProbitWT,waic_P_WT,loo_P_WT),
+                    Logit_SRI = c(DICLogitSRI,waic_L_SRI,loo_L_SRI),
+                    Probit_SRI = c(DICProbitSRI,waic_P_SRI,loo_P_SRI))
+rownames(res_df) = c("DIC","WAIC","LOO-CV")
+res_df
+```
+
+<br/>**References**<br/>
+(1) https://jrnold.github.io/bugs-examples-in-stan/corporatism.html <br/>
+(2) https://data.princeton.edu/pop510/hospStan <br/>
+
+
+
+
+
