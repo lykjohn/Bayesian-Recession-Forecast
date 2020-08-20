@@ -1,2 +1,3 @@
 # Bayesian-Recession-Forecast
-A Bayesian Computing Project 
+A Collaboration on Bayesian Computing
+
